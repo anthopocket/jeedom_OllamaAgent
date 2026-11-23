@@ -234,13 +234,13 @@ class ollamaAgentMessaging {
     }
 
     private static function lastRoute($sender) {
-        $all = json_decode((string)config::byKey('msg_last', 'ollamaAgent', '{}'), true);
+        $all = ollamaAgent::configArray('msg_last');
         $key = self::digits($sender) ?: (string)$sender;
         return (is_array($all) && isset($all[$key])) ? $all[$key] : null;
     }
 
     private static function saveRoute($sender, $eq) {
-        $all = json_decode((string)config::byKey('msg_last', 'ollamaAgent', '{}'), true);
+        $all = ollamaAgent::configArray('msg_last');
         if (!is_array($all)) {
             $all = [];
         }

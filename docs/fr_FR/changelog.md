@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.4.1 (2026-11-23)
+- Conformité avec la doc développeurs du Core 4.4 : `"require": "4.4"` dans info.json ; JavaScript basé uniquement sur les fonctions du Core (jeeValue, setJeeValues, triggerEvent, empty, domUtils.ajax, domUtils(…) pour le chargement, jeeDialog.toast pour les messages) ; addCmdToTable écrit selon le modèle de la doc (createElement + setJeeValues + appendChild). Solutions de repli supprimées.
+
+## 2.4.0 (2026-11-23)
+- Interface entièrement réécrite en JavaScript pur, sans jQuery (page des agents et configuration du plugin) : compatible avec les versions de Jeedom qui ne fournissent plus jQuery. Utilise jeeValue / setJeeValues / jeeDialog et domUtils.ajax de Jeedom quand ils existent, avec repli (fetch + jeton Jeedom).
+- Les écouteurs ne sont posés qu'une fois, même quand Jeedom recharge la page du plugin (pas d'actions en double).
+
+## 2.3.9 (2026-11-23)
+- Onglet « Infos & Actions exposées » réorganisé : 1) on choisit un ou plusieurs plugins (boutons, avec le nombre de commandes cochées), seules leurs commandes s'affichent ; 2) on coche l'utile, avec recherche pour affiner et boutons « Cocher / Décocher les infos affichées ». Sans plugin choisi : seules les commandes déjà cochées sont affichées. Le choix des plugins est retenu pour chaque agent.
+
+## 2.3.8 (2026-11-23)
+- Correction importante : les valeurs JSON de la configuration (état précédent de la surveillance, compteur de contrôles réseau ratés, dernier agent par expéditeur) étaient relues de travers, car Jeedom les décode déjà. Conséquences corrigées : « Premier contrôle » à chaque passage, « Nouveaux hors ligne » jamais rempli, équipements IP jamais déclarés hors ligne, suite de conversation WhatsApp mal suivie.
+
+## 2.3.7 (2026-11-23)
+- Onglet « Infos & Actions exposées » : recherche à plusieurs mots (« victron batterie »), sans accents et avec les équivalents français / anglais, colonne Plugin, compteur des commandes cochées, liste plus haute.
+
+## 2.3.6 (2026-11-23)
+- Le champ « Commentaire » des équipements Jeedom est envoyé à l'agent avec leurs commandes (lire_plugin, infos exposées, recherche, lire_commande), une seule fois par équipement : un bon endroit pour expliquer une valeur (unité, signe, capacité…).
+
+## 2.3.5 (2026-11-23)
+- Filtre de `lire_plugin` : équivalents français / anglais (batterie = battery, soc, charge ; solaire = pv, solar ; consommation = consumption, load ; réseau = grid…), sans tenir compte des accents. Si rien ne correspond, l'agent reçoit la liste des noms de commandes pour réessayer, au lieu d'un résultat vide.
+
 ## 2.3.4 (2026-11-23)
 - Réponse d'Ollama reçue au fil de l'eau : le délai (timeout) ne coupe plus que si Ollama ne produit plus rien pendant ce temps ; une réponse longue mais qui avance n'est plus perdue (plafond : 4 × le délai).
 - `lire_plugin` compact : commandes visibles et non vides, groupées par équipement, 60 commandes / 6 000 caractères au plus, et paramètre `filtre` (ex. batterie) pour ne lire que l'utile. Évite de déborder le contexte du modèle (cause des 300 s sans réponse).

@@ -100,6 +100,15 @@ Le type se choisit dans le premier onglet. Crée un équipement par type : chacu
 
 Les commandes cochées dans « Infos & Actions exposées » restent possibles pour tous les types : par exemple les températures pour l'agent Énergie, ou « Changer midi » pour l'agent Repas.
 
+## Aider l'agent à comprendre tes commandes
+
+Écris une explication dans le champ **Commentaire** de l'équipement Jeedom (page de l'équipement, onglet Informations). L'agent la reçoit avec les commandes de cet équipement :
+```
+#14990 [Maison][2-Batterie - Charge][Conso Jour] = 3.2 kWh
+  (À savoir sur [Maison][2-Batterie - Charge] : Charge de la batterie Pytes 15 kWh. Valeur négative = décharge.)
+```
+Le commentaire est utile pour indiquer ce que mesure l'équipement, le sens d'une valeur négative, une capacité, un compteur monté à l'envers… Pour une information générale, qui ne concerne pas un équipement précis, utilise plutôt les notes permanentes de l'agent.
+
 ## Mémoire (onglet de l'agent)
 
 **Conversation :** l'agent garde les derniers échanges, 5 par défaut. Tu peux donc enchaîner :

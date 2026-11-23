@@ -6,7 +6,7 @@ if (!isConnect('admin')) {
     throw new Exception('{{401 - Accès non autorisé}}');
 }
 ?>
-<form class="form-horizontal">
+<form class="form-horizontal" id="div_ollamaAgentConfig">
     <fieldset>
         <legend><i class="fas fa-server"></i> {{Ollama}}</legend>
         <div class="form-group">
@@ -200,44 +200,68 @@ if (!isConnect('admin')) {
 </form>
 
 <script>
-function ollamaAgentMsgMode() {
-    var jw = $('#sel_msgJwEq').value() !== '';
-    $('.msgGenericOnly').toggle(!jw);
-    $('.msgJwOnly').toggle(jw);
-}
-$('#sel_msgJwEq').on('change', ollamaAgentMsgMode);
-setTimeout(ollamaAgentMsgMode, 500);
+/* JavaScript pur avec les fonctions du Core Jeedom 4.4+ : cette page est affichée par la gestion des plugins */
+domUtils(function() {
+    var root = document.getElementById('div_ollamaAgentConfig');
+    if (!root) {
+        return;
+    }
 
-$('.bt_selectMsgCmd').off('click').on('click', function() {
-    var key = $(this).attr('data-key');
-    var type = $(this).attr('data-type');
-    var filter = (type == 'action') ? {type: 'action', subType: 'message'} : {type: 'info'};
-    jeedom.cmd.getSelectModal({cmd: filter}, function(result) {
-        $('.configKey[data-l1key=' + key + ']').value(result.human);
-    });
-});
+    function msgMode() {
+        var sel = root.querySelector('#sel_msgJwEq');
+        var jw = !!sel && sel.jeeValue() !== '';
+        root.querySelectorAll('.msgGenericOnly').forEach(function(el) { el.style.display = jw ? 'none' : ''; });
+        root.querySelectorAll('.msgJwOnly').forEach(function(el) { el.style.display = jw ? '' : 'none'; });
+    }
+    var sel = root.querySelector('#sel_msgJwEq');
+    if (sel) {
+        sel.addEventListener('change', msgMode);
+    }
+    // le Core remplit les champs après l'affichage : on recalcule un peu plus tard
+    setTimeout(msgMode, 300);
+    setTimeout(msgMode, 1200);
 
-$('#bt_testOllama').off('click').on('click', function() {
-    var url = $('#in_ollamaUrl').val();
-    $('#div_ollamaTestResult').html('<span class="label label-warning"><i class="fas fa-spinner fa-spin"></i> {{Test en cours...}}</span>');
-    $.ajax({
-        type: 'POST',
-        url: 'plugins/ollamaAgent/core/ajax/ollamaAgent.ajax.php',
-        data: {
-            action: 'testConnection',
-            url: url
-        },
-        dataType: 'json',
-        error: function(request, status, error) {
-            handleAjaxError(request, status, error);
-        },
-        success: function(data) {
-            if (data.state != 'ok') {
-                $('#div_ollamaTestResult').html('<div class="alert alert-danger" style="margin-top:5px;">' + data.result + '</div>');
-                return;
-            }
-            $('#div_ollamaTestResult').html('<div class="alert alert-success" style="margin-top:5px;">' + data.result + '</div>');
-        }
+    root.querySelectorAll('.bt_selectMsgCmd').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            var key = btn.getAttribute('data-key');
+            var filter = btn.getAttribute('data-type') == 'action' ? {type: 'action', subType: 'message'} : {type: 'info'};
+            jeedom.cmd.getSelectModal({cmd: filter}, function(result) {
+                var field = root.querySelector('.configKey[data-l1key="' + key + '"]');
+                field.jeeValue(result.human);
+                field.triggerEvent('change');
+            });
+        });
     });
+
+    var bt = root.querySelector('#bt_testOllama');
+    if (bt) {
+        bt.addEventListener('click', function(e) {
+            e.preventDefault();
+            var out = root.querySelector('#div_ollamaTestResult');
+            out.innerHTML = '<span class="label label-warning"><i class="fas fa-spinner fa-spin"></i> {{Test en cours...}}</span>';
+            var show = function(ok, text) {
+                var div = document.createElement('div');
+                div.className = 'alert ' + (ok ? 'alert-success' : 'alert-danger');
+                div.style.marginTop = '5px';
+                div.textContent = text;
+                out.empty();
+                out.appendChild(div);
+            };
+            domUtils.ajax({
+                type: 'POST',
+                url: 'plugins/ollamaAgent/core/ajax/ollamaAgent.ajax.php',
+                data: {action: 'testConnection', url: root.querySelector('#in_ollamaUrl').jeeValue()},
+                dataType: 'json',
+                global: false,
+                error: function(request, status, error) {
+                    show(false, 'Erreur Ajax : ' + error);
+                },
+                success: function(data) {
+                    show(data.state == 'ok', data.result);
+                }
+            });
+        });
+    }
 });
 </script>

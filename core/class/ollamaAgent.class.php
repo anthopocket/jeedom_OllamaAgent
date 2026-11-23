@@ -345,6 +345,28 @@ class ollamaAgent extends eqLogic {
         return $val;
     }
 
+    /** Commentaire de l'équipement (champ « Commentaire » de Jeedom), sur une ligne */
+    public static function eqComment($eq) {
+        if (!is_object($eq) || !method_exists($eq, 'getComment')) {
+            return '';
+        }
+        $c = trim(preg_replace('/\s+/', ' ', strip_tags((string)$eq->getComment())));
+        return mb_strlen($c) > 400 ? mb_substr($c, 0, 400) . '…' : $c;
+    }
+
+    /**
+     * Ligne « commentaire » d'un équipement, une seule fois par équipement :
+     * $seen garde les équipements déjà expliqués dans ce texte.
+     */
+    private static function eqCommentLine($eq, &$seen, $indent = '  ') {
+        if (!is_object($eq) || isset($seen[$eq->getId()])) {
+            return null;
+        }
+        $seen[$eq->getId()] = true;
+        $c = self::eqComment($eq);
+        return $c === '' ? null : $indent . '(À savoir sur ' . $eq->getHumanName() . ' : ' . $c . ')';
+    }
+
     private static function cmdLine($cmd, $max = 300) {
         $eq = $cmd->getEqLogic();
         $eqName = is_object($eq) ? $eq->getHumanName() : '';
@@ -355,6 +377,38 @@ class ollamaAgent extends eqLogic {
     }
 
     /** Toutes les commandes info des équipements actifs d'un plugin */
+    /* Équivalents pour le filtre de lire_plugin (les plugins mélangent noms français et anglais) */
+    const FILTER_SYNONYMS = [
+        'batterie' => ['batterie', 'battery', 'batt', 'soc', 'charge'],
+        'charge' => ['charge', 'soc', 'state of charge', 'charging'],
+        'soc' => ['soc', 'charge', 'state of charge'],
+        'production' => ['production', 'pv', 'solaire', 'solar', 'yield', 'mppt', 'onduleur', 'inverter'],
+        'solaire' => ['solaire', 'solar', 'pv', 'production', 'mppt', 'yield'],
+        'consommation' => ['consommation', 'consumption', 'conso', 'load', 'charge ac', 'ac out', 'critical'],
+        'puissance' => ['puissance', 'power', 'watt', ' w'],
+        'reseau' => ['reseau', 'grid', 'edf', 'linky', 'ac in', 'import', 'export'],
+        'tension' => ['tension', 'voltage', 'volt'],
+        'courant' => ['courant', 'current', 'ampere'],
+        'temperature' => ['temperature', 'temp'],
+        'prevision' => ['prevision', 'forecast', 'estimate', 'estimation'],
+    ];
+
+    private static function fold($t) {
+        $t = mb_strtolower((string)$t);
+        return strtr($t, ['à' => 'a', 'â' => 'a', 'é' => 'e', 'è' => 'e', 'ê' => 'e', 'ë' => 'e', 'î' => 'i', 'ï' => 'i', 'ô' => 'o', 'ù' => 'u', 'û' => 'u', 'ç' => 'c']);
+    }
+
+    /** Un mot du filtre correspond-il ? (avec ses équivalents français / anglais) */
+    private static function filterMatch($word, $hay) {
+        $alts = self::FILTER_SYNONYMS[$word] ?? [$word];
+        foreach ($alts as $a) {
+            if (mb_strpos($hay, $a) !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Commandes info d'un plugin, groupées par équipement et compactes (taille limitée pour
      * ne pas déborder le contexte du modèle). $filtre = mots à chercher (équipement ou commande).
@@ -364,19 +418,19 @@ class ollamaAgent extends eqLogic {
         if (!is_array($eqs) || count($eqs) == 0) {
             return "Plugin {$pluginId} : aucun équipement actif.";
         }
-        $words = array_filter(preg_split('/\s+/', mb_strtolower(trim((string)$filtre))));
+        $words = array_values(array_filter(preg_split('/\s+/', self::fold(trim((string)$filtre)))));
         $lines = ["Plugin {$pluginId}" . (!empty($words) ? ' (filtre : ' . implode(' ', $words) . ')' : '') . ' — #id = numéro de commande pour lire_commande / lire_historique :'];
         $n = 0;
         $skipped = 0;
         $chars = 0;
         foreach ($eqs as $eq) {
             $eqLines = [];
-            $eqName = mb_strtolower($eq->getName());
+            $eqName = self::fold($eq->getName());
             foreach ($eq->getCmd('info') as $cmd) {
                 if (!empty($words)) {
-                    $hay = $eqName . ' ' . mb_strtolower($cmd->getName() . ' ' . $cmd->getLogicalId());
+                    $hay = $eqName . ' ' . self::fold($cmd->getName() . ' ' . $cmd->getLogicalId() . ' ' . $cmd->getUnite());
                     foreach ($words as $w) {
-                        if (mb_strpos($hay, $w) === false) {
+                        if (!self::filterMatch($w, $hay)) {
                             continue 2;
                         }
                     }
@@ -399,11 +453,28 @@ class ollamaAgent extends eqLogic {
             }
             if (!empty($eqLines)) {
                 $lines[] = '- ' . $eq->getHumanName() . ' :';
+                $c = self::eqComment($eq);
+                if ($c !== '') {
+                    $lines[] = '  (À savoir : ' . $c . ')';
+                }
                 $lines = array_merge($lines, $eqLines);
             }
         }
+        if ($n == 0 && !empty($words)) {
+            // rien trouvé : on donne les noms disponibles pour que le modèle choisisse un meilleur filtre
+            $names = [];
+            foreach ($eqs as $eq) {
+                foreach ($eq->getCmd('info') as $cmd) {
+                    if ($cmd->getIsVisible() == 1) {
+                        $names[$cmd->getName()] = true;
+                    }
+                }
+            }
+            $list = implode(', ', array_slice(array_keys($names), 0, 80));
+            return "Plugin {$pluginId} : aucune commande ne correspond à « " . implode(' ', $words) . " ». Noms des commandes disponibles : " . $list . '. Relance lire_plugin avec un de ces mots comme filtre.';
+        }
         if ($n == 0) {
-            return "Plugin {$pluginId} : aucune commande" . (!empty($words) ? ' ne correspond au filtre.' : ' visible avec une valeur.');
+            return "Plugin {$pluginId} : aucune commande visible avec une valeur.";
         }
         if ($skipped > 0) {
             $lines[] = "… {$skipped} autre(s) commande(s) non affichée(s) : relance lire_plugin avec un filtre (ex. batterie, production, consommation).";
@@ -842,10 +913,7 @@ class ollamaAgent extends eqLogic {
             }
         }
 
-        $fails = json_decode((string)config::byKey('net_fails', 'ollamaAgent', '{}'), true);
-        if (!is_array($fails)) {
-            $fails = [];
-        }
+        $fails = self::configArray('net_fails') ?? [];
         $h['verification'] = [];
 
         // Ping des équipements IP
@@ -940,9 +1008,8 @@ class ollamaAgent extends eqLogic {
         foreach ($h['demons'] as $d) {
             $current['dem_' . $d] = 'Démon ' . $d;
         }
-        $prevRaw = (string)config::byKey('health_prev', 'ollamaAgent', '');
-        $prev = json_decode($prevRaw, true);
-        if ($prevRaw === '' || !is_array($prev)) {
+        $prev = self::configArray('health_prev');
+        if ($prev === null) {
             // tout premier contrôle : ce qui est déjà en panne n'est pas « nouveau »
             log::add('ollamaAgent', 'info', '[Santé] Premier contrôle : ' . count($current) . ' problème(s) déjà présent(s), pris comme point de départ.');
             $prev = $current;
@@ -1471,6 +1538,7 @@ class ollamaAgent extends eqLogic {
         }
         $words = array_filter(preg_split('/\s+/', $needle));
         $lines = [];
+        $seen = [];
         foreach (eqLogic::all() as $eq) {
             if (!$eq->getIsEnable()) {
                 continue;
@@ -1487,6 +1555,10 @@ class ollamaAgent extends eqLogic {
                 }
                 if ($ok) {
                     $lines[] = self::cmdLine($cmd, 150);
+                    $cl = self::eqCommentLine($eq, $seen);
+                    if ($cl !== null) {
+                        $lines[] = $cl;
+                    }
                     if (count($lines) >= $limit) {
                         $lines[] = '… (résultats tronqués, préciser la recherche)';
                         return implode("\n", $lines);
@@ -1525,7 +1597,11 @@ class ollamaAgent extends eqLogic {
                     if (!$this->canRead($cmd)) {
                         return "Commande #{$cmd->getId()}# non autorisée pour cet agent.";
                     }
-                    return ($toolName == 'lire_commande') ? self::cmdLine($cmd, 1000) : self::readHistory($cmd, $args['heures'] ?? 24);
+                    if ($toolName == 'lire_commande') {
+                        $c = self::eqComment($cmd->getEqLogic());
+                        return self::cmdLine($cmd, 1000) . ($c !== '' ? "\n(À savoir sur l'équipement : " . $c . ')' : '');
+                    }
+                    return self::readHistory($cmd, $args['heures'] ?? 24);
                 case 'etat_jeedom':
                     return self::healthText(self::getHealth(), true, true);
                 case 'lire_agenda':
@@ -2022,6 +2098,23 @@ class ollamaAgent extends eqLogic {
 
     const OUTPUT_TYPES = ['binaire' => 'binary', 'nombre' => 'numeric', 'texte' => 'string', 'liste' => 'string'];
 
+    /**
+     * Lit une valeur JSON de la configuration du plugin.
+     * Jeedom décode déjà lui-même le JSON enregistré : config::byKey renvoie un tableau.
+     * Retourne null si la clé n'a jamais été enregistrée.
+     */
+    public static function configArray($key) {
+        $v = config::byKey($key, 'ollamaAgent', null);
+        if (is_array($v)) {
+            return $v;
+        }
+        if ($v === null || $v === '') {
+            return null;
+        }
+        $j = json_decode((string)$v, true);
+        return is_array($j) ? $j : null;
+    }
+
     public static function slug($txt) {
         $t = mb_strtolower(trim((string)$txt));
         $t = strtr($t, ['à' => 'a', 'â' => 'a', 'ä' => 'a', 'é' => 'e', 'è' => 'e', 'ê' => 'e', 'ë' => 'e', 'î' => 'i', 'ï' => 'i', 'ô' => 'o', 'ö' => 'o', 'ù' => 'u', 'û' => 'u', 'ü' => 'u', 'ç' => 'c', 'œ' => 'oe']);
@@ -2352,10 +2445,15 @@ class ollamaAgent extends eqLogic {
         $selectedInfoIds = $this->exposedInfoIds();
         if (!empty($selectedInfoIds)) {
             $contextParts[] = "\n--- ÉTAT ACTUEL DES ÉQUIPEMENTS JEEDOM ---";
+            $seen = [];
             foreach ($selectedInfoIds as $id) {
                 $cmd = cmd::byId(trim($id));
                 if (is_object($cmd) && $cmd->getType() == 'info') {
                     $contextParts[] = self::cmdLine($cmd);
+                    $cl = self::eqCommentLine($cmd->getEqLogic(), $seen);
+                    if ($cl !== null) {
+                        $contextParts[] = $cl;
+                    }
                 }
             }
         }

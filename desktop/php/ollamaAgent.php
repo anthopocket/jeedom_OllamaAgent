@@ -457,22 +457,64 @@ $eqLogics = eqLogic::byType($plugin->getId());
 
             <div role="tabpanel" class="tab-pane" id="exposedtab">
                 <br>
+                <?php
+                // Commandes regroupées par plugin (eqType) : on n'affiche que les plugins choisis
+                $exposedRows = ['info' => [], 'action' => []];
+                $pluginCounts = [];
+                $pluginNames = [];
+                foreach (plugin::listPlugin(true) as $pl) {
+                    $pluginNames[$pl->getId()] = $pl->getName();
+                }
+                foreach (eqLogic::all() as $eq) {
+                    if ($eq->getEqType_name() == 'ollamaAgent') {
+                        continue;
+                    }
+                    $type = $eq->getEqType_name();
+                    $objName = is_object($eq->getObject()) ? $eq->getObject()->getName() : __('Aucun', __FILE__);
+                    foreach (['info', 'action'] as $kind) {
+                        foreach ($eq->getCmd($kind) as $cmd) {
+                            $exposedRows[$kind][] = [$type, $objName, $eq, $cmd];
+                            $pluginCounts[$type] = ($pluginCounts[$type] ?? 0) + 1;
+                        }
+                    }
+                }
+                uksort($pluginCounts, function ($x, $y) use ($pluginNames) {
+                    return strcasecmp($pluginNames[$x] ?? $x, $pluginNames[$y] ?? $y);
+                });
+                ?>
+                <legend><i class="fas fa-puzzle-piece"></i> {{1. Choisis un ou plusieurs plugins}}</legend>
+                <div id="div_exposedPlugins" style="margin-bottom:10px;">
+                    <?php
+                    foreach ($pluginCounts as $type => $nb) {
+                        $label = $pluginNames[$type] ?? $type;
+                        echo '<label class="btn btn-default btn-xs exposedPluginBtn" style="margin:2px;" data-plugin="' . htmlspecialchars($type) . '">';
+                        echo '<input type="checkbox" class="eqLogicAttr cb_exposedPlugin" style="display:none;" data-l1key="configuration" data-l2key="exposed_view_plugins" data-l3key="' . htmlspecialchars($type) . '" data-plugin="' . htmlspecialchars($type) . '" /> ';
+                        echo htmlspecialchars($label) . ' <span class="badge exposedPluginBadge" data-plugin="' . htmlspecialchars($type) . '"></span>';
+                        echo '</label>';
+                    }
+                    ?>
+                </div>
+                <legend><i class="fas fa-check-square"></i> {{2. Coche les commandes utiles}}</legend>
                 <div class="row">
-                    <div class="col-sm-6">
+                    <div class="col-sm-5">
                         <div class="input-group">
                             <span class="input-group-addon"><i class="fas fa-search"></i></span>
-                            <input type="text" class="form-control" id="in_searchExposedCmd" placeholder="{{Filtrer par nom d'équipement, objet ou commande...}}" />
+                            <input type="text" class="form-control" id="in_searchExposedCmd" placeholder="{{Affiner : batterie, salon temperature…}}" />
                         </div>
                     </div>
-                    <div class="col-sm-6">
+                    <div class="col-sm-7">
                         <label class="checkbox-inline" style="margin-top:6px;">
-                            <input type="checkbox" id="cb_onlyCheckedCmds" /> {{Afficher uniquement les commandes cochées}}
+                            <input type="checkbox" id="cb_onlyCheckedCmds" /> {{Seulement les cochées (tous plugins)}}
                         </label>
+                        <a class="btn btn-default btn-xs" id="bt_checkVisibleCmds" style="margin-left:8px;"><i class="far fa-check-square"></i> {{Cocher les infos affichées}}</a>
+                        <a class="btn btn-default btn-xs" id="bt_uncheckVisibleCmds"><i class="far fa-square"></i> {{Décocher les infos affichées}}</a>
+                        <span class="label label-info" id="span_exposedCount" style="margin-left:8px;"></span>
                     </div>
                 </div>
-                <br>
+                <div class="alert alert-info" id="div_exposedHint" style="margin-top:10px;">{{Les commandes cochées sont envoyées à chaque demande (l'agent les voit sans appeler d'outil) et il peut lire leur historique. Coche seulement l'utile : moins il y en a, plus il répond vite. Le « Commentaire » de l'équipement est envoyé avec.}}</div>
+
                 <legend><i class="fas fa-eye"></i> {{Commandes Infos exposées (lecture contexte)}}</legend>
-                <div style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin-bottom: 15px;">
+                <div style="max-height: 450px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin-bottom: 15px;">
                     <table class="table table-condensed table-hover" id="table_exposedCmds">
                         <thead>
                             <tr>
@@ -485,23 +527,17 @@ $eqLogics = eqLogic::byType($plugin->getId());
                         </thead>
                         <tbody>
                             <?php
-                            foreach (eqLogic::all() as $eq) {
-                                if ($eq->getEqType_name() == 'ollamaAgent') {
-                                    continue;
-                                }
-                                $objName = is_object($eq->getObject()) ? $eq->getObject()->getName() : __('Aucun', __FILE__);
-                                foreach ($eq->getCmd('info') as $cmd) {
-                                    $cmdId = $cmd->getId();
-                                    $val = $cmd->execCmd();
-                                    $unit = $cmd->getUnite();
-                                    echo '<tr class="exposedCmdRow">';
-                                    echo '<td><input type="checkbox" class="eqLogicAttr cb_exposedCmd" data-l1key="configuration" data-l2key="exposed_cmds" data-l3key="' . $cmdId . '" /></td>';
-                                    echo '<td>' . htmlspecialchars($objName) . '</td>';
-                                    echo '<td>' . htmlspecialchars($eq->getName()) . '</td>';
-                                    echo '<td>' . htmlspecialchars($cmd->getName()) . ' <small class="text-muted">(#' . $cmdId . '#)</small></td>';
-                                    echo '<td>' . htmlspecialchars((string)$val . ' ' . (string)$unit) . '</td>';
-                                    echo '</tr>';
-                                }
+                            foreach ($exposedRows['info'] as $r) {
+                                list($type, $objName, $eq, $cmd) = $r;
+                                $cmdId = $cmd->getId();
+                                $val = $cmd->execCmd();
+                                echo '<tr class="exposedCmdRow" data-plugin="' . htmlspecialchars($type) . '" style="display:none;">';
+                                echo '<td><input type="checkbox" class="eqLogicAttr cb_exposedCmd" data-l1key="configuration" data-l2key="exposed_cmds" data-l3key="' . $cmdId . '" /></td>';
+                                echo '<td>' . htmlspecialchars($objName) . '</td>';
+                                echo '<td>' . htmlspecialchars($eq->getName()) . '</td>';
+                                echo '<td>' . htmlspecialchars($cmd->getName()) . ' <small class="text-muted">(#' . $cmdId . '#)</small></td>';
+                                echo '<td>' . htmlspecialchars(mb_substr((string)(is_array($val) ? json_encode($val) : $val), 0, 80) . ' ' . (string)$cmd->getUnite()) . '</td>';
+                                echo '</tr>';
                             }
                             ?>
                         </tbody>
@@ -522,21 +558,16 @@ $eqLogics = eqLogic::byType($plugin->getId());
                         </thead>
                         <tbody>
                             <?php
-                            foreach (eqLogic::all() as $eq) {
-                                if ($eq->getEqType_name() == 'ollamaAgent') {
-                                    continue;
-                                }
-                                $objName = is_object($eq->getObject()) ? $eq->getObject()->getName() : __('Aucun', __FILE__);
-                                foreach ($eq->getCmd('action') as $cmd) {
-                                    $cmdId = $cmd->getId();
-                                    echo '<tr class="exposedCmdRow">';
-                                    echo '<td><input type="checkbox" class="eqLogicAttr cb_exposedCmd" data-l1key="configuration" data-l2key="exposed_action_cmds" data-l3key="' . $cmdId . '" /></td>';
-                                    echo '<td>' . htmlspecialchars($objName) . '</td>';
-                                    echo '<td>' . htmlspecialchars($eq->getName()) . '</td>';
-                                    echo '<td>' . htmlspecialchars($cmd->getName()) . ' <small class="text-muted">(#' . $cmdId . '#)</small></td>';
-                                    echo '<td>' . htmlspecialchars((string)$cmd->getSubType()) . '</td>';
-                                    echo '</tr>';
-                                }
+                            foreach ($exposedRows['action'] as $r) {
+                                list($type, $objName, $eq, $cmd) = $r;
+                                $cmdId = $cmd->getId();
+                                echo '<tr class="exposedCmdRow" data-plugin="' . htmlspecialchars($type) . '" style="display:none;">';
+                                echo '<td><input type="checkbox" class="eqLogicAttr cb_exposedCmd" data-l1key="configuration" data-l2key="exposed_action_cmds" data-l3key="' . $cmdId . '" /></td>';
+                                echo '<td>' . htmlspecialchars($objName) . '</td>';
+                                echo '<td>' . htmlspecialchars($eq->getName()) . '</td>';
+                                echo '<td>' . htmlspecialchars($cmd->getName()) . ' <small class="text-muted">(#' . $cmdId . '#)</small></td>';
+                                echo '<td>' . htmlspecialchars((string)$cmd->getSubType()) . '</td>';
+                                echo '</tr>';
                             }
                             ?>
                         </tbody>
