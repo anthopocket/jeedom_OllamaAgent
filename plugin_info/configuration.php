@@ -95,6 +95,29 @@ if (!isConnect('admin')) {
         </div>
         </div>
         <div class="form-group">
+            <label class="col-lg-4 control-label">{{Quand répondre}}</label>
+            <div class="col-lg-4">
+                <select class="configKey form-control" data-l1key="msg_trigger_mode">
+                    <option value="keyword">{{Seulement quand on l'appelle (@agent ou mot d'appel)}}</option>
+                    <option value="always">{{À tous les messages}}</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="col-lg-4 control-label">{{Mots d'appel}}
+                <sup><i class="fas fa-question-circle tooltips" title="{{En début de message, séparés par des virgules. Ex. « ia qu'est-ce qu'on mange ? ». @nom-de-l'agent marche toujours, ainsi que /agents et /oublie.}}"></i></sup>
+            </label>
+            <div class="col-lg-3">
+                <input class="configKey form-control" data-l1key="msg_trigger_words" placeholder="ia" />
+            </div>
+            <label class="col-lg-2 control-label">{{Suite sans mot d'appel (min)}}
+                <sup><i class="fas fa-question-circle tooltips" title="{{Après une réponse, les messages suivants vont au même agent sans mot d'appel pendant ce nombre de minutes (« et samedi aussi »). 0 = toujours exiger le mot d'appel.}}"></i></sup>
+            </label>
+            <div class="col-lg-1">
+                <input class="configKey form-control" data-l1key="msg_followup_min" placeholder="0" />
+            </div>
+        </div>
+        <div class="form-group">
             <label class="col-lg-4 control-label">{{Expéditeurs autorisés}}
                 <sup><i class="fas fa-question-circle tooltips" title="{{Numéros, identifiants WhatsApp (LID) ou profils jeeWhatsapp (user_mapping), séparés par des virgules. Vide = personne. * = tout le monde (déconseillé). Un expéditeur refusé est écrit dans le log ollamaAgent, à recopier ici.}}"></i></sup>
             </label>

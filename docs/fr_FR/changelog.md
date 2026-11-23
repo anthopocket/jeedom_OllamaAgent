@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.5.1 (2026-11-23)
+- WhatsApp : les agents ne répondent plus à tous les messages du groupe, seulement quand on les appelle : « @agent … » en début de message (l'IA choisit le bon agent), ou « @repas … », « @energy … » pour un agent précis. Mot d'appel modifiable, /agents et /oublie toujours actifs.
+- Option « Suite sans mot d'appel » (minutes) pour enchaîner (« et samedi aussi ») ; option « À tous les messages » pour revenir à l'ancien fonctionnement.
+
 ## 2.5.0 (2026-11-23)
 - Ouverture des agents beaucoup plus rapide : la page ne fabrique plus une ligne (ni ne lit la valeur) pour chaque commande de Jeedom. L'onglet « Infos & Actions exposées » charge à la demande les commandes cochées, puis celles d'un plugin au premier clic sur son bouton.
 - La sélection est enregistrée dans deux champs (liste d'ID) au lieu de milliers de cases. Les anciennes sélections sont reprises automatiquement à l'ouverture de l'agent (sauvegarder pour les convertir).

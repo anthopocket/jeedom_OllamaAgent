@@ -233,6 +233,60 @@ class ollamaAgentMessaging {
         return null;
     }
 
+    /** Mots d'appel (« @agent » par défaut : l'IA choisit ensuite le bon agent) */
+    public static function triggerWords() {
+        $raw = config::byKey('msg_trigger_words', 'ollamaAgent', '');
+        if (trim((string)$raw) === '') {
+            $raw = '@agent';
+        }
+        return array_values(array_filter(array_map(function ($w) {
+            return trim(mb_strtolower($w));
+        }, preg_split('/[,;\n]+/', (string)$raw)), 'strlen'));
+    }
+
+    /**
+     * Le message appelle-t-il un agent ?
+     * Retourne [true, texte sans le mot d'appel] ou [false, texte].
+     * - « @agent … » ou « agent: … » (nom, type ou mot-clé d'un agent)
+     * - un mot d'appel en début de message (« @agent … » par défaut), ou « @ … »
+     * - /agents, /oublie
+     * - la suite d'une conversation, si l'option est réglée (minutes)
+     */
+    public static function isCalled($text, $sender, $agents) {
+        if (config::byKey('msg_trigger_mode', 'ollamaAgent', 'keyword') == 'always') {
+            return [true, $text];
+        }
+        if (preg_match('#^\s*/#u', $text)) {
+            return [true, $text];
+        }
+        if (self::routeByPrefix($text, $agents) !== null) {
+            return [true, $text];
+        }
+        $low = mb_strtolower(ltrim($text));
+        foreach (array_merge(self::triggerWords(), ['@']) as $w) {
+            if (mb_strpos($low, $w) !== 0) {
+                continue;
+            }
+            $rest = mb_substr(ltrim($text), mb_strlen($w));
+            // le mot d'appel doit être un mot entier : « @agent combien… », « @agent: … » (pas « @agentcool »)
+            if ($rest !== '' && !preg_match('/^[\s:,!?.\-]/u', $rest)) {
+                continue;
+            }
+            $rest = trim(preg_replace('/^[\s:,!.\-]+/u', '', $rest));
+            if ($rest !== '') {
+                return [true, $rest];
+            }
+        }
+        $minutes = (int)config::byKey('msg_followup_min', 'ollamaAgent', 0);
+        if ($minutes > 0) {
+            $last = self::lastRoute($sender);
+            if (is_array($last) && time() - (int)($last['ts'] ?? 0) <= $minutes * 60) {
+                return [true, $text]; // suite de conversation
+            }
+        }
+        return [false, $text];
+    }
+
     private static function lastRoute($sender) {
         $all = ollamaAgent::configArray('msg_last');
         $key = self::digits($sender) ?: (string)$sender;
@@ -340,7 +394,8 @@ class ollamaAgentMessaging {
         }
         $lower = mb_strtolower($text);
         if (in_array($lower, ['/agents', 'agents', 'agents ?', '/aide', 'aide'], true)) {
-            $l = ['Agents disponibles (commence ton message par @nom pour en choisir un) :'];
+            $w = self::triggerWords();
+            $l = ['Agents disponibles. Commence ton message par @nom pour en choisir un précis' . (config::byKey('msg_trigger_mode', 'ollamaAgent', 'keyword') == 'always' ? '' : ', ou par « ' . ($w[0] ?? '@agent') . ' » pour laisser l\'IA choisir') . ' :'];
             foreach ($agents as $eq) {
                 $l[] = '@' . ollamaAgent::slug($eq->getName()) . ' — ' . self::description($eq);
             }
@@ -353,6 +408,12 @@ class ollamaAgentMessaging {
                 $agents[(string)$last['agent']]->clearHistory();
                 self::sendReply('Nouvelle conversation avec ' . $agents[(string)$last['agent']]->getName() . '.', $sender, $agents[(string)$last['agent']]->getName());
             }
+            return;
+        }
+
+        list($called, $text) = self::isCalled($text, $sender, $agents);
+        if (!$called) {
+            log::add('ollamaAgent', 'debug', '[Messagerie] Message ignoré : pas d\'appel (« @agent … » ou « ' . implode(' » / « ', self::triggerWords()) . ' … »)');
             return;
         }
 

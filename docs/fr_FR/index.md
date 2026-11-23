@@ -81,6 +81,13 @@ Avec une demande programmée (par exemple `09:00;*;Faut-il lancer les machines a
 
 **Sur chaque agent** (onglet « Sorties, envoi & programmation ») : coche **Répond sur la messagerie**. Tu peux aussi préciser ses sujets et ses mots d'appel.
 
+**Quand les agents répondent :** seulement quand on les appelle, en début de message :
+- `@agent combien de batterie ?` → l'IA choisit le bon agent ;
+- `@repas …`, `@energy …` → un agent précis ;
+- `/agents`, `/oublie` → toujours actifs.
+
+Les autres messages du groupe sont ignorés. Le mot d'appel se change dans la configuration. L'option « Suite sans mot d'appel » permet d'enchaîner pendant quelques minutes sans le retaper, et « À tous les messages » rend le fonctionnement d'avant.
+
 **Comment l'agent est choisi :**
 - `@repas …` ou `agenda: …` → l'agent nommé (nom, type ou mot d'appel) ;
 - sinon, l'IA choisit d'après les sujets de chaque agent. Une suite de conversation (« et samedi aussi ») reste chez le même agent ;
