@@ -342,6 +342,27 @@ class ollamaAgent extends eqLogic {
         return null;
     }
 
+    /**
+     * keep_alive des appels PENDANT une demande : « décharger » ne doit pas vider la carte
+     * entre deux tours d'outils, sinon le modèle est rechargé à chaque appel.
+     */
+    public function keepAliveDuring() {
+        $k = $this->keepAlive();
+        return $k === 0 ? '5m' : $k;
+    }
+
+    /** Décharge le modèle de la carte graphique (fin de demande, réglage « Décharger juste après ») */
+    public static function unloadModel($model) {
+        if (trim((string)$model) === '') {
+            return;
+        }
+        if (self::ollamaRequest('POST', '/api/generate', ['model' => $model, 'keep_alive' => 0], 30) === null) {
+            log::add('ollamaAgent', 'debug', '[Modèles] Déchargement de ' . $model . ' impossible (Ollama injoignable ?)');
+        } else {
+            log::add('ollamaAgent', 'debug', '[Modèles] ' . $model . ' déchargé');
+        }
+    }
+
     public function modelName() {
         $m = trim((string)$this->getConfiguration('model', ''));
         return $m === '' ? 'qwen2.5vl:7b' : $m;
@@ -443,16 +464,40 @@ class ollamaAgent extends eqLogic {
         } catch (Throwable $e) {
             log::add('ollamaAgent', 'warning', '[Messagerie] ' . $e->getMessage());
         }
-        self::warmPermanentModels();
-        $hasHealth = false;
-        foreach (eqLogic::byType('ollamaAgent', true) as $eq) {
-            if ($eq->hasFeature('health')) {
-                $hasHealth = true;
-                break;
-            }
+        // pings, tests de ports et préchargement des modèles peuvent être longs :
+        // en arrière-plan, pour ne pas retarder les tâches des autres plugins
+        $worker = dirname(__FILE__) . '/../php/worker.php';
+        $phpBin = defined('PHP_BINARY') && !empty(PHP_BINARY) ? PHP_BINARY : 'php';
+        exec(escapeshellcmd($phpBin) . ' ' . escapeshellarg($worker) . ' maintenance >> ' . escapeshellarg(log::getPathToLog('ollamaAgent')) . ' 2>&1 &');
+    }
+
+    /** Tâche de fond des 5 minutes : modèles permanents + surveillance (jamais deux en même temps) */
+    public static function maintenance() {
+        $lock = @fopen(self::tmpDir() . '/maintenance.lock', 'c');
+        if ($lock && !flock($lock, LOCK_EX | LOCK_NB)) {
+            log::add('ollamaAgent', 'debug', '[Maintenance] Le contrôle précédent tourne encore : passage ignoré.');
+            fclose($lock);
+            return;
         }
-        if ($hasHealth) {
-            self::refreshHealth();
+        try {
+            self::warmPermanentModels();
+            $hasHealth = false;
+            foreach (eqLogic::byType('ollamaAgent', true) as $eq) {
+                if ($eq->hasFeature('health')) {
+                    $hasHealth = true;
+                    break;
+                }
+            }
+            if ($hasHealth) {
+                $t = microtime(true);
+                self::refreshHealth();
+                log::add('ollamaAgent', 'debug', '[Santé] Contrôle fait en ' . round(microtime(true) - $t, 1) . ' s');
+            }
+        } finally {
+            if ($lock) {
+                flock($lock, LOCK_UN);
+                fclose($lock);
+            }
         }
     }
 
@@ -501,7 +546,27 @@ class ollamaAgent extends eqLogic {
     }
 
     /** Ping parallèle : [clé => hôte] → [clé => bool] */
+    /**
+     * Ping parallèle en deux temps : un essai rapide pour tous, puis, pour ceux qui n'ont pas
+     * répondu, plusieurs essais avec un délai plus long (équipements lents à répondre).
+     */
     public static function pingMany(array $hosts) {
+        $out = self::pingPass($hosts, 1, 2);
+        $retry = array_intersect_key($hosts, array_filter($out, function ($ok) {
+            return $ok === false;
+        }));
+        if (!empty($retry)) {
+            $wait = max(1, min(20, (int)config::byKey('ping_timeout', 'ollamaAgent', 3)));
+            $count = max(1, min(10, (int)config::byKey('ping_count', 'ollamaAgent', 3)));
+            foreach (self::pingPass($retry, $count, $wait) as $k => $ok) {
+                $out[$k] = $ok;
+            }
+        }
+        return $out;
+    }
+
+    /** Un passage de ping : réussi si au moins une réponse sur $count essais */
+    private static function pingPass(array $hosts, $count, $wait) {
         $out = [];
         if (empty($hosts) || !self::pingAvailable()) {
             return $out;
@@ -509,7 +574,7 @@ class ollamaAgent extends eqLogic {
         foreach (array_chunk($hosts, 40, true) as $chunk) {
             $parts = [];
             foreach ($chunk as $k => $h) {
-                $parts[] = '(ping -c 1 -W 1 ' . escapeshellarg($h) . ' >/dev/null 2>&1 && echo ' . escapeshellarg($k . ' OK') . ' || echo ' . escapeshellarg($k . ' KO') . ') &';
+                $parts[] = '(ping -c ' . (int)$count . ' -i 0.5 -W ' . (int)$wait . ' ' . escapeshellarg($h) . ' >/dev/null 2>&1 && echo ' . escapeshellarg($k . ' OK') . ' || echo ' . escapeshellarg($k . ' KO') . ') &';
             }
             $lines = [];
             exec('/bin/bash -c ' . escapeshellarg(implode(' ', $parts) . ' wait'), $lines);
@@ -539,6 +604,19 @@ class ollamaAgent extends eqLogic {
     }
 
     /** Liste des serveurs de la configuration : « Nom;hôte[;port] » par ligne */
+    /**
+     * Échecs réseau consécutifs : un équipement IP ou un serveur n'est déclaré hors ligne
+     * qu'après N contrôles ratés de suite (un ping perdu une fois ne suffit pas).
+     */
+    private static function netFailed($key, $failedNow, &$fails) {
+        if (!$failedNow) {
+            unset($fails[$key]);
+            return false;
+        }
+        $fails[$key] = (int)($fails[$key] ?? 0) + 1;
+        return $fails[$key] >= max(1, (int)config::byKey('net_fail_count', 'ollamaAgent', 2));
+    }
+
     public static function parseServers() {
         $list = [];
         $raw = (string)config::byKey('health_servers', 'ollamaAgent', '');
@@ -601,11 +679,19 @@ class ollamaAgent extends eqLogic {
             }
             list($cat, $ip) = self::classify($eq, $zigbee, $zwave, $bt);
             $name = $eq->getHumanName();
+            // la clé / le contrôleur (Z-Stick, coordinateur Zigbee) n'émet pas comme un équipement
+            if (in_array($cat, ['zigbee', 'zwave']) && preg_match('/contr[oô]leur|controller|z[\s\-‐]?stick|coordinat|coordinator|\bbridge\b|passerelle/iu', $eq->getName() . ' ' . $eq->getLogicalId())) {
+                continue;
+            }
             $last = $eq->getStatus('lastCommunication', '');
             $lastTs = $last ? (int)strtotime($last) : 0;
             $timeoutMin = (int)$eq->getTimeout();
             if ($timeoutMin <= 0) {
                 $timeoutMin = $defTimeout[$cat];
+                // sur pile (contacts de fenêtre…) : ils ne parlent qu'au changement d'état ou au réveil
+                if ($timeoutMin > 0 && $eq->getStatus('battery', '') !== '') {
+                    $timeoutMin = max($timeoutMin, (int)config::byKey('timeout_battery', 'ollamaAgent', 1500));
+                }
             }
             $h['categories'][$cat]['total']++;
 
@@ -644,6 +730,12 @@ class ollamaAgent extends eqLogic {
             }
         }
 
+        $fails = json_decode((string)config::byKey('net_fails', 'ollamaAgent', '{}'), true);
+        if (!is_array($fails)) {
+            $fails = [];
+        }
+        $h['verification'] = [];
+
         // Ping des équipements IP
         if (!empty($toPing)) {
             $results = self::pingMany($toPing);
@@ -651,8 +743,11 @@ class ollamaAgent extends eqLogic {
                 $h['ping'] = false;
             }
             foreach ($ipEntries as $k => $entry) {
-                if (isset($results[$k]) && $results[$k] === false) {
-                    $entry['reason'] = trim('ne répond pas au ping (' . $entry['ip'] . ')' . ($entry['reason'] !== '' ? ', ' . $entry['reason'] : ''));
+                $noReply = isset($results[$k]) && $results[$k] === false;
+                if (self::netFailed('ip_' . $k, $noReply, $fails)) {
+                    $entry['reason'] = trim('ne répond pas au ping (' . $entry['ip'] . ', ' . $fails['ip_' . $k] . ' contrôles de suite)' . ($entry['reason'] !== '' ? ', ' . $entry['reason'] : ''));
+                } elseif ($noReply) {
+                    $h['verification'][] = $entry['name'] . ' (' . $entry['ip'] . ')';
                 }
                 if ($entry['reason'] !== '') {
                     $h['categories']['ip']['hs'][] = $entry;
@@ -666,13 +761,21 @@ class ollamaAgent extends eqLogic {
         $pingServers = [];
         foreach ($servers as $i => $s) {
             if ($s['port'] > 0) {
-                $errno = 0;
+                $tcpWait = max(1, min(30, (int)config::byKey('tcp_timeout', 'ollamaAgent', 5)));
                 $errstr = '';
-                $fp = @fsockopen($s['host'], $s['port'], $errno, $errstr, 2);
-                if ($fp) {
-                    fclose($fp);
-                } else {
-                    $h['serveurs']['hs'][] = ['name' => $s['name'], 'reason' => 'port ' . $s['port'] . ' fermé sur ' . $s['host'] . ($errstr ? ' (' . $errstr . ')' : '')];
+                $open = false;
+                for ($try = 0; $try < 2 && !$open; $try++) {
+                    $errno = 0;
+                    $fp = @fsockopen($s['host'], $s['port'], $errno, $errstr, $tcpWait);
+                    if ($fp) {
+                        fclose($fp);
+                        $open = true;
+                    }
+                }
+                if (self::netFailed('srv_' . $s['name'], !$open, $fails)) {
+                    $h['serveurs']['hs'][] = ['name' => $s['name'], 'reason' => 'port ' . $s['port'] . ' fermé sur ' . $s['host'] . ($errstr ? ' (' . $errstr . ')' : '') . ', ' . $fails['srv_' . $s['name']] . ' contrôles de suite'];
+                } elseif (!$open) {
+                    $h['verification'][] = 'Serveur ' . $s['name'];
                 }
             } else {
                 $pingServers['s' . $i] = $s['host'];
@@ -681,12 +784,16 @@ class ollamaAgent extends eqLogic {
         if (!empty($pingServers)) {
             $r = self::pingMany($pingServers);
             foreach ($pingServers as $k => $host) {
-                if (isset($r[$k]) && $r[$k] === false) {
-                    $s = $servers[(int)substr($k, 1)];
-                    $h['serveurs']['hs'][] = ['name' => $s['name'], 'reason' => 'ne répond pas au ping (' . $host . ')'];
+                $s = $servers[(int)substr($k, 1)];
+                $noReply = isset($r[$k]) && $r[$k] === false;
+                if (self::netFailed('srv_' . $s['name'], $noReply, $fails)) {
+                    $h['serveurs']['hs'][] = ['name' => $s['name'], 'reason' => 'ne répond pas au ping (' . $host . ', ' . $fails['srv_' . $s['name']] . ' contrôles de suite)'];
+                } elseif ($noReply) {
+                    $h['verification'][] = 'Serveur ' . $s['name'];
                 }
             }
         }
+        config::save('net_fails', json_encode($fails), 'ollamaAgent');
 
         // Démons et dépendances des plugins
         foreach (plugin::listPlugin(true) as $plugin) {
@@ -721,9 +828,12 @@ class ollamaAgent extends eqLogic {
         foreach ($h['demons'] as $d) {
             $current['dem_' . $d] = 'Démon ' . $d;
         }
-        $prev = json_decode((string)config::byKey('health_prev', 'ollamaAgent', '[]'), true);
-        if (!is_array($prev)) {
-            $prev = [];
+        $prevRaw = (string)config::byKey('health_prev', 'ollamaAgent', '');
+        $prev = json_decode($prevRaw, true);
+        if ($prevRaw === '' || !is_array($prev)) {
+            // tout premier contrôle : ce qui est déjà en panne n'est pas « nouveau »
+            log::add('ollamaAgent', 'info', '[Santé] Premier contrôle : ' . count($current) . ' problème(s) déjà présent(s), pris comme point de départ.');
+            $prev = $current;
         }
         $h['nouveaux'] = array_values(array_diff_key($current, $prev));
         $h['revenus'] = array_values(array_diff_key($prev, $current));
@@ -903,6 +1013,9 @@ class ollamaAgent extends eqLogic {
             foreach (array_slice($h['signal'], 0, $max) as $p) {
                 $l[] = '  - ' . $p['name'] . ' : ' . $p['value'];
             }
+        }
+        if (!empty($h['verification'])) {
+            $l[] = 'Sans réponse à ce contrôle, en vérification (pas encore hors ligne) : ' . implode(', ', $h['verification']);
         }
         if (!empty($h['nouveaux'])) {
             $l[] = 'Nouveaux problèmes depuis le dernier contrôle : ' . implode(', ', $h['nouveaux']);
@@ -1886,7 +1999,7 @@ class ollamaAgent extends eqLogic {
         if ($this->getConfiguration('cpu_only', 0) == 1) {
             $payload['options']['num_gpu'] = 0;
         }
-        $keepAlive = $this->keepAlive();
+        $keepAlive = $this->keepAliveDuring();
         if ($keepAlive !== null) {
             $payload['keep_alive'] = $keepAlive;
         }
@@ -2224,7 +2337,7 @@ class ollamaAgent extends eqLogic {
             if ($this->getConfiguration('cpu_only', 0) == 1) {
                 $payload['options']['num_gpu'] = 0;
             }
-            $keepAlive = $this->keepAlive();
+            $keepAlive = $this->keepAliveDuring();
             if ($keepAlive !== null) {
                 $payload['keep_alive'] = $keepAlive;
             }
@@ -2312,6 +2425,10 @@ class ollamaAgent extends eqLogic {
             }
         }
         $this->finishRequest($reply, $isError, $imageFile, $tStart, $context);
+        // « Décharger juste après » : une seule fois, quand toute la demande est finie
+        if ($this->keepAlive() === 0) {
+            self::unloadModel($model);
+        }
         // cet agent a pu faire sortir un modèle permanent (ex. vision) de la carte graphique : on le recharge
         if ($this->keepAlive() !== -1) {
             self::warmPermanentModels();

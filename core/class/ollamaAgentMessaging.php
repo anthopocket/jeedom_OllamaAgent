@@ -287,7 +287,7 @@ class ollamaAgentMessaging {
                 ['role' => 'user', 'content' => $text],
             ],
         ];
-        $keep = $default->keepAlive();
+        $keep = $default->keepAliveDuring(); // l'agent choisi va souvent utiliser le même modèle juste après
         if ($keep !== null) {
             $payload['keep_alive'] = $keep;
         }

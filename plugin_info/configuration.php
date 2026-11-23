@@ -143,6 +143,15 @@ if (!isConnect('admin')) {
             </div>
         </div>
         <div class="form-group">
+            <label class="col-lg-4 control-label">{{Patience réseau}}
+                <sup><i class="fas fa-question-circle tooltips" title="{{Ping : un essai rapide, puis pour ceux qui ne répondent pas, N essais avec ce délai. Port : 2 essais avec ce délai. Un équipement IP ou un serveur n'est déclaré hors ligne qu'après le nombre de contrôles ratés de suite indiqué (un contrôle toutes les 5 min).}}"></i></sup>
+            </label>
+            <div class="col-lg-2"><div class="input-group"><span class="input-group-addon">{{Ping}}</span><input class="configKey form-control" data-l1key="ping_timeout" placeholder="3" /><span class="input-group-addon">s</span></div></div>
+            <div class="col-lg-2"><div class="input-group"><span class="input-group-addon">{{Essais}}</span><input class="configKey form-control" data-l1key="ping_count" placeholder="3" /></div></div>
+            <div class="col-lg-2"><div class="input-group"><span class="input-group-addon">{{Port}}</span><input class="configKey form-control" data-l1key="tcp_timeout" placeholder="5" /><span class="input-group-addon">s</span></div></div>
+            <div class="col-lg-2"><div class="input-group"><span class="input-group-addon">{{Ratés de suite}}</span><input class="configKey form-control" data-l1key="net_fail_count" placeholder="2" /></div></div>
+        </div>
+        <div class="form-group">
             <label class="col-lg-4 control-label">{{Types Zigbee}}</label>
             <div class="col-lg-6">
                 <input class="configKey form-control" data-l1key="types_zigbee" placeholder="zigbee,z2m,zigbee2mqtt,deconz,zigate,zhaJeedom" />
@@ -168,6 +177,13 @@ if (!isConnect('admin')) {
             <div class="col-lg-2"><div class="input-group"><span class="input-group-addon">Zigbee</span><input class="configKey form-control" data-l1key="timeout_zigbee" placeholder="240" /></div></div>
             <div class="col-lg-2"><div class="input-group"><span class="input-group-addon">Z-Wave</span><input class="configKey form-control" data-l1key="timeout_zwave" placeholder="240" /></div></div>
             <div class="col-lg-2"><div class="input-group"><span class="input-group-addon">BT</span><input class="configKey form-control" data-l1key="timeout_bt" placeholder="60" /></div></div>
+        </div>
+        <div class="form-group">
+            <label class="col-lg-4 control-label">{{Équipements sur pile (min)}}
+                <sup><i class="fas fa-question-circle tooltips" title="{{Contacts de fenêtre, détecteurs… : ils ne communiquent qu'au changement d'état ou au réveil. Délai utilisé s'il n'y a pas de délai d'alerte réglé dans Jeedom. 1500 min = 25 h.}}"></i></sup>
+            </label>
+            <div class="col-lg-2"><input class="configKey form-control" data-l1key="timeout_battery" placeholder="1500" /></div>
+            <div class="col-lg-6 help-block">{{Pour un équipement précis, règle plutôt son « Délai avant alerte » dans Jeedom (Configuration avancée de l'équipement) : il est prioritaire.}}</div>
         </div>
         <div class="form-group">
             <label class="col-lg-4 control-label">{{Seuils}}</label>

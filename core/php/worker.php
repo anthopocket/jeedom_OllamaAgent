@@ -18,6 +18,16 @@ if (!is_array($context)) {
     $context = [];
 }
 
+// Tâche de fond des 5 minutes (surveillance, modèles permanents)
+if ($eqLogicId === 'maintenance') {
+    try {
+        ollamaAgent::maintenance();
+    } catch (Throwable $e) {
+        log::add('ollamaAgent', 'error', '[Worker] Maintenance : ' . $e->getMessage() . ' (' . $e->getFile() . ':' . $e->getLine() . ')');
+    }
+    exit(0);
+}
+
 // Message reçu par la messagerie : tri vers le bon agent puis réponse à l'expéditeur
 if ($eqLogicId === 'route') {
     try {

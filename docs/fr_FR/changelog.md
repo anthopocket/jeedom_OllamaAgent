@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.3 (2026-11-23)
+- Ping plus patient : un essai rapide, puis pour ceux qui n'ont pas répondu, 3 essais avec 3 s de délai (réglables). Test de port : 2 essais, 5 s de délai (réglable).
+- Un équipement IP ou un serveur n'est déclaré hors ligne qu'après 2 contrôles ratés de suite (réglable) ; avant, il apparaît « en vérification » dans le bilan.
+- La surveillance et le préchargement des modèles tournent en arrière-plan : ils ne retardent plus les tâches des autres plugins, et deux contrôles ne se chevauchent jamais.
+
+## 2.3.2 (2026-11-23)
+- Correction : avec « Décharger juste après la réponse », le modèle était déchargé à chaque appel d'outil puis rechargé (demandes très lentes). Il reste chargé pendant toute la demande et n'est déchargé qu'à la fin.
+- Surveillance : le tout premier contrôle sert de point de départ (plus d'alerte « Nouveaux hors ligne » pour ce qui était déjà en panne).
+- Surveillance : équipements sur pile (contacts de fenêtre…) sans délai d'alerte Jeedom : délai de 25 h par défaut (réglable).
+- Surveillance : la clé ou le contrôleur Zigbee / Z-Wave (Z-Stick, coordinateur) n'est plus compté comme équipement.
+
 ## 2.3.1 (2026-11-23)
 - Correction : la page de configuration du plugin s'affichait vide (classe de la messagerie non chargée : « Class ollamaAgentMessaging not found »).
 - Correction : même défaut dans le worker lors du tri d'un message reçu (les réponses WhatsApp ne partaient pas) et dans le script d'installation.
