@@ -122,6 +122,104 @@ function ollamaAgentWordMatch(word, text) {
     return alts.some(function(a) { return text.indexOf(a) !== -1; });
 }
 
+/* Sélection des commandes exposées : gardée ici, enregistrée dans deux champs cachés (liste d'ID) */
+var oaExposed = {info: {}, action: {}, loadedPlugins: {}, rendered: {}};
+
+function oaIdsFrom(list, legacy) {
+    var out = {};
+    if (typeof list === 'string') {
+        list.split(',').forEach(function(id) {
+            id = id.trim();
+            if (/^\d+$/.test(id)) {
+                out[id] = true;
+            }
+        });
+        return out;
+    }
+    // ancien format : une case par commande {id: '1'}
+    if (legacy && typeof legacy === 'object') {
+        Object.keys(legacy).forEach(function(id) {
+            if (legacy[id] == 1) {
+                out[id] = true;
+            }
+        });
+    }
+    return out;
+}
+
+function oaSaveExposed() {
+    var info = document.getElementById('in_exposedList');
+    var action = document.getElementById('in_exposedActionList');
+    if (info) {
+        info.jeeValue(Object.keys(oaExposed.info).join(','));
+        info.triggerEvent('change');
+    }
+    if (action) {
+        action.jeeValue(Object.keys(oaExposed.action).join(','));
+        action.triggerEvent('change');
+    }
+}
+
+function oaEsc(t) {
+    var d = document.createElement('div');
+    d.textContent = t == null ? '' : String(t);
+    return d.innerHTML;
+}
+
+function oaRenderRows(rows) {
+    var tInfo = oaQ('#table_exposedCmds tbody');
+    var tAction = oaQ('#table_exposedActionCmds tbody');
+    if (!tInfo || !tAction) {
+        return;
+    }
+    var fragInfo = document.createDocumentFragment();
+    var fragAction = document.createDocumentFragment();
+    rows.forEach(function(r) {
+        if (oaExposed.rendered[r.id]) {
+            return;
+        }
+        oaExposed.rendered[r.id] = true;
+        var kind = r.type == 'action' ? 'action' : 'info';
+        var tr = document.createElement('tr');
+        tr.className = 'exposedCmdRow';
+        tr.setAttribute('data-plugin', r.plugin);
+        tr.innerHTML = '<td><input type="checkbox" class="cb_exposedCmd" data-id="' + oaEsc(r.id) + '" data-kind="' + kind + '"' + (oaExposed[kind][r.id] ? ' checked' : '') + ' /></td>'
+            + '<td>' + oaEsc(r.object) + '</td>'
+            + '<td>' + oaEsc(r.eq) + '</td>'
+            + '<td>' + oaEsc(r.name) + ' <small class="text-muted">(#' + oaEsc(r.id) + '#)</small></td>'
+            + '<td>' + oaEsc(kind == 'info' ? r.value : r.subType) + '</td>';
+        (kind == 'info' ? fragInfo : fragAction).appendChild(tr);
+    });
+    tInfo.appendChild(fragInfo);
+    tAction.appendChild(fragAction);
+}
+
+/** Charge les commandes des plugins demandés (une seule fois par plugin) et des ID donnés */
+function oaLoadCmds(plugins, ids, done) {
+    plugins = plugins.filter(function(p) { return !oaExposed.loadedPlugins[p]; });
+    ids = ids.filter(function(id) { return !oaExposed.rendered[id]; });
+    if (!plugins.length && !ids.length) {
+        if (done) {
+            done();
+        }
+        return;
+    }
+    plugins.forEach(function(p) { oaExposed.loadedPlugins[p] = 'loading'; });
+    var hint = oaQ('#div_exposedHint');
+    if (hint) {
+        hint.textContent = 'Chargement des commandes…';
+    }
+    oaAjax({action: 'listCmds', plugins: JSON.stringify(plugins), ids: JSON.stringify(ids)}, function(rows) {
+        plugins.forEach(function(p) { oaExposed.loadedPlugins[p] = true; });
+        if (rows) {
+            oaRenderRows(rows);
+        }
+        if (done) {
+            done();
+        }
+    });
+}
+
 function filterExposedCmds() {
     // plugins choisis (boutons du haut)
     var plugins = {};
@@ -149,12 +247,7 @@ function filterExposedCmds() {
         if (isChecked) {
             checkedByPlugin[plugin] = (checkedByPlugin[plugin] || 0) + 1;
         }
-        var inScope;
-        if (onlyChecked || nbPlugins === 0) {
-            inScope = isChecked; // sans plugin choisi : ce qui est déjà coché
-        } else {
-            inScope = plugins[plugin] === true;
-        }
+        var inScope = (onlyChecked || nbPlugins === 0) ? isChecked : plugins[plugin] === true;
         var rowText = inScope && words.length ? ollamaAgentFold(row.textContent) : '';
         var matchSearch = words.every(function(w) { return ollamaAgentWordMatch(w, rowText); });
         oaToggle(row, inScope && matchSearch);
@@ -163,8 +256,8 @@ function filterExposedCmds() {
         var n = checkedByPlugin[b.getAttribute('data-plugin')] || 0;
         b.textContent = n ? n : '';
     });
-    var nInfo = oaQA('#table_exposedCmds .cb_exposedCmd').filter(function(c) { return c.checked; }).length;
-    var nAction = oaQA('#table_exposedActionCmds .cb_exposedCmd').filter(function(c) { return c.checked; }).length;
+    var nInfo = Object.keys(oaExposed.info).length;
+    var nAction = Object.keys(oaExposed.action).length;
     var count = oaQ('#span_exposedCount');
     if (count) {
         count.textContent = nInfo + ' info(s)' + (nAction ? ' · ' + nAction + ' action(s)' : '') + ' cochée(s)';
@@ -186,10 +279,54 @@ function ollamaAgentCheckVisible(state) {
             var cb = row.querySelector('.cb_exposedCmd');
             if (cb) {
                 cb.checked = state;
+                oaSetExposed(cb);
             }
         }
     });
+    oaSaveExposed();
     filterExposedCmds();
+}
+
+function oaSetExposed(cb) {
+    var kind = cb.getAttribute('data-kind');
+    var id = cb.getAttribute('data-id');
+    if (cb.checked) {
+        oaExposed[kind][id] = true;
+    } else {
+        delete oaExposed[kind][id];
+    }
+}
+
+/** À l'ouverture d'un agent : sa sélection, puis seulement les commandes utiles (cochées + plugins choisis) */
+function oaExposedInit(_eqLogic) {
+    var conf = _eqLogic.configuration || {};
+    oaExposed = {
+        info: oaIdsFrom(conf.exposed_list, conf.exposed_cmds),
+        action: oaIdsFrom(conf.exposed_action_list, conf.exposed_action_cmds),
+        loadedPlugins: {},
+        rendered: {}
+    };
+    oaQA('#table_exposedCmds tbody, #table_exposedActionCmds tbody').forEach(function(t) { t.empty(); });
+    // nouvel agent : recherche et filtre remis à zéro
+    var search = oaQ('#in_searchExposedCmd');
+    if (search) {
+        search.value = '';
+    }
+    var only = oaQ('#cb_onlyCheckedCmds');
+    if (only) {
+        only.checked = false;
+    }
+    oaSaveExposed(); // reprend l'ancien format dans les nouveaux champs
+    var plugins = [];
+    var view = conf.exposed_view_plugins || {};
+    Object.keys(view).forEach(function(p) {
+        if (view[p] == 1) {
+            plugins.push(p);
+        }
+    });
+    var ids = Object.keys(oaExposed.info).concat(Object.keys(oaExposed.action));
+    filterExposedCmds();
+    oaLoadCmds(plugins, ids, filterExposedCmds);
 }
 
 /* ---------- Type d'agent ---------- */
@@ -271,7 +408,7 @@ function printEqLogic(_eqLogic) {
     if (_eqLogic.id) {
         ollamaAgentMemory('getMemory', {});
     }
-    setTimeout(filterExposedCmds, 100);
+    oaExposedInit(_eqLogic);
 }
 
 /* ---------- Événements (posés une seule fois : Jeedom recharge ce script à chaque ouverture) ---------- */
@@ -284,7 +421,16 @@ if (!window.__ollamaAgentEvents) {
         if (!t || !t.closest) {
             return;
         }
-        if (t.matches('.cb_exposedCmd, .cb_exposedPlugin, #cb_onlyCheckedCmds')) {
+        if (t.matches('.cb_exposedCmd')) {
+            oaSetExposed(t);
+            oaSaveExposed();
+            filterExposedCmds();
+        } else if (t.matches('.cb_exposedPlugin')) {
+            if (t.checked) {
+                oaLoadCmds([t.getAttribute('data-plugin')], [], filterExposedCmds);
+            }
+            filterExposedCmds();
+        } else if (t.matches('#cb_onlyCheckedCmds')) {
             filterExposedCmds();
         } else if (t.matches('#sel_agentType')) {
             ollamaAgentApplyType();

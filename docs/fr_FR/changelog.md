@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.5.0 (2026-11-23)
+- Ouverture des agents beaucoup plus rapide : la page ne fabrique plus une ligne (ni ne lit la valeur) pour chaque commande de Jeedom. L'onglet « Infos & Actions exposées » charge à la demande les commandes cochées, puis celles d'un plugin au premier clic sur son bouton.
+- La sélection est enregistrée dans deux champs (liste d'ID) au lieu de milliers de cases. Les anciennes sélections sont reprises automatiquement à l'ouverture de l'agent (sauvegarder pour les convertir).
+- Recherche et filtre remis à zéro en passant d'un agent à l'autre.
+
 ## 2.4.1 (2026-11-23)
 - Conformité avec la doc développeurs du Core 4.4 : `"require": "4.4"` dans info.json ; JavaScript basé uniquement sur les fonctions du Core (jeeValue, setJeeValues, triggerEvent, empty, domUtils.ajax, domUtils(…) pour le chargement, jeeDialog.toast pour les messages) ; addCmdToTable écrit selon le modèle de la doc (createElement + setJeeValues + appendChild). Solutions de repli supprimées.
 

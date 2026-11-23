@@ -68,6 +68,12 @@ try {
         ]);
     }
 
+    if (init('action') == 'listCmds') {
+        $plugins = json_decode((string)init('plugins', '[]'), true);
+        $ids = json_decode((string)init('ids', '[]'), true);
+        ajax::success(ollamaAgent::listCmdsForUi(is_array($plugins) ? $plugins : [], is_array($ids) ? $ids : []));
+    }
+
     if (init('action') == 'healthNow') {
         $health = ollamaAgent::refreshHealth();
         ajax::success(ollamaAgent::healthText($health, true, true));

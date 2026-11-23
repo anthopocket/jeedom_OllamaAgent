@@ -319,19 +319,75 @@ class ollamaAgent extends eqLogic {
         return $this->hasFeature('full_read');
     }
 
-    private function exposedInfoIds() {
+    /**
+     * Commandes cochées : liste « id,id,… » dans un seul champ (exposed_list / exposed_action_list).
+     * Si ce champ n'a jamais été enregistré, on relit l'ancien format (une case par commande).
+     */
+    private function exposedIds($listKey, $legacyKey) {
+        $list = $this->getConfiguration($listKey, null);
+        if ($list !== null && !is_array($list)) {
+            return array_values(array_filter(array_map('trim', explode(',', (string)$list)), 'ctype_digit'));
+        }
         $ids = [];
-        $exposed = $this->getConfiguration('exposed_cmds', []);
-        if (is_array($exposed)) {
-            foreach ($exposed as $cmdId => $checked) {
+        $legacy = $this->getConfiguration($legacyKey, []);
+        if (is_array($legacy)) {
+            foreach ($legacy as $cmdId => $checked) {
                 if ($checked == 1) {
                     $ids[] = (string)$cmdId;
                 }
             }
-        } elseif (!empty($exposed)) {
-            $ids = array_map('trim', explode(',', $exposed));
         }
         return $ids;
+    }
+
+    public function exposedInfoIds() {
+        return $this->exposedIds('exposed_list', 'exposed_cmds');
+    }
+
+    public function exposedActionIds() {
+        return $this->exposedIds('exposed_action_list', 'exposed_action_cmds');
+    }
+
+    /** Commandes à afficher dans l'onglet « Infos & Actions exposées » (chargées à la demande) */
+    public static function listCmdsForUi($plugins, $ids) {
+        $rows = [];
+        $seen = [];
+        $add = function ($eq, $cmd) use (&$rows, &$seen) {
+            if (isset($seen[$cmd->getId()])) {
+                return;
+            }
+            $seen[$cmd->getId()] = true;
+            $obj = $eq->getObject();
+            $val = '';
+            if ($cmd->getType() == 'info') {
+                $v = $cmd->execCmd();
+                $val = mb_substr(is_array($v) ? json_encode($v) : (string)$v, 0, 80) . ($cmd->getUnite() !== '' ? ' ' . $cmd->getUnite() : '');
+            }
+            $rows[] = [
+                'id' => (string)$cmd->getId(),
+                'type' => $cmd->getType(),
+                'subType' => $cmd->getSubType(),
+                'plugin' => $eq->getEqType_name(),
+                'object' => is_object($obj) ? $obj->getName() : 'Aucun',
+                'eq' => $eq->getName(),
+                'name' => $cmd->getName(),
+                'value' => $val,
+            ];
+        };
+        foreach ($plugins as $p) {
+            foreach (eqLogic::byType((string)$p) as $eq) {
+                foreach ($eq->getCmd() as $cmd) {
+                    $add($eq, $cmd);
+                }
+            }
+        }
+        foreach ($ids as $id) {
+            $cmd = cmd::byId((int)$id);
+            if (is_object($cmd) && is_object($cmd->getEqLogic())) {
+                $add($cmd->getEqLogic(), $cmd);
+            }
+        }
+        return $rows;
     }
 
     private static function shortValue($val, $max = 300) {
@@ -2415,7 +2471,6 @@ class ollamaAgent extends eqLogic {
         $systemPrompt = $this->getConfiguration('system_prompt', '');
         $includeLogs = $this->getConfiguration('include_logs', 0);
         $deviceControl = $this->getConfiguration('device_control', 0);
-        $exposedActionCmds = $this->getConfiguration('exposed_action_cmds', []);
         $jsonFormat = $this->getConfiguration('json_format', 0);
         $disableThink = $this->getConfiguration('disable_think', 0);
         $numCtx = (int)$this->getConfiguration('num_ctx', 0);
@@ -2478,14 +2533,7 @@ class ollamaAgent extends eqLogic {
             $injected = true;
         }
 
-        $selectedActionIds = [];
-        if ($deviceControl == 1 && is_array($exposedActionCmds)) {
-            foreach ($exposedActionCmds as $cmdId => $checked) {
-                if ($checked == 1) {
-                    $selectedActionIds[] = (string)$cmdId;
-                }
-            }
-        }
+        $selectedActionIds = $deviceControl == 1 ? $this->exposedActionIds() : [];
 
         $tools = $this->buildReadTools();
         if ($deviceControl == 1) {

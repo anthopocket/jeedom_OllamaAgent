@@ -373,11 +373,17 @@ $eqLogics = eqLogic::byType($plugin->getId());
                                         $hb = in_array(strtolower($b->getId()), $highlight) ? 0 : 1;
                                         return $ha == $hb ? strcasecmp($a->getName(), $b->getName()) : $ha - $hb;
                                     });
+                                    $eqActive = [];
+                                    foreach (eqLogic::all() as $eqY) {
+                                        if ($eqY->getIsEnable()) {
+                                            $eqActive[$eqY->getEqType_name()] = ($eqActive[$eqY->getEqType_name()] ?? 0) + 1;
+                                        }
+                                    }
                                     foreach ($plugins as $pl) {
                                         if ($pl->getId() == 'ollamaAgent') {
                                             continue;
                                         }
-                                        $nb = count(eqLogic::byType($pl->getId(), true));
+                                        $nb = $eqActive[$pl->getId()] ?? 0;
                                         $bold = in_array(strtolower($pl->getId()), $highlight);
                                         echo '<tr>';
                                         echo '<td><input type="checkbox" class="eqLogicAttr" data-l1key="configuration" data-l2key="readable_plugins" data-l3key="' . htmlspecialchars($pl->getId()) . '" /></td>';
@@ -458,36 +464,30 @@ $eqLogics = eqLogic::byType($plugin->getId());
             <div role="tabpanel" class="tab-pane" id="exposedtab">
                 <br>
                 <?php
-                // Commandes regroupées par plugin (eqType) : on n'affiche que les plugins choisis
-                $exposedRows = ['info' => [], 'action' => []];
-                $pluginCounts = [];
+                // Rien de lourd ici : seulement le nombre d'équipements par plugin (les commandes sont chargées à la demande)
+                $eqCountByType = [];
+                foreach (eqLogic::all() as $eqX) {
+                    if ($eqX->getEqType_name() != 'ollamaAgent') {
+                        $eqCountByType[$eqX->getEqType_name()] = ($eqCountByType[$eqX->getEqType_name()] ?? 0) + 1;
+                    }
+                }
                 $pluginNames = [];
                 foreach (plugin::listPlugin(true) as $pl) {
                     $pluginNames[$pl->getId()] = $pl->getName();
                 }
-                foreach (eqLogic::all() as $eq) {
-                    if ($eq->getEqType_name() == 'ollamaAgent') {
-                        continue;
-                    }
-                    $type = $eq->getEqType_name();
-                    $objName = is_object($eq->getObject()) ? $eq->getObject()->getName() : __('Aucun', __FILE__);
-                    foreach (['info', 'action'] as $kind) {
-                        foreach ($eq->getCmd($kind) as $cmd) {
-                            $exposedRows[$kind][] = [$type, $objName, $eq, $cmd];
-                            $pluginCounts[$type] = ($pluginCounts[$type] ?? 0) + 1;
-                        }
-                    }
-                }
-                uksort($pluginCounts, function ($x, $y) use ($pluginNames) {
+                uksort($eqCountByType, function ($x, $y) use ($pluginNames) {
                     return strcasecmp($pluginNames[$x] ?? $x, $pluginNames[$y] ?? $y);
                 });
                 ?>
+                <!-- la sélection est enregistrée dans ces deux champs (liste d'ID séparés par des virgules) -->
+                <input type="hidden" class="eqLogicAttr" data-l1key="configuration" data-l2key="exposed_list" id="in_exposedList" />
+                <input type="hidden" class="eqLogicAttr" data-l1key="configuration" data-l2key="exposed_action_list" id="in_exposedActionList" />
                 <legend><i class="fas fa-puzzle-piece"></i> {{1. Choisis un ou plusieurs plugins}}</legend>
                 <div id="div_exposedPlugins" style="margin-bottom:10px;">
                     <?php
-                    foreach ($pluginCounts as $type => $nb) {
+                    foreach ($eqCountByType as $type => $nb) {
                         $label = $pluginNames[$type] ?? $type;
-                        echo '<label class="btn btn-default btn-xs exposedPluginBtn" style="margin:2px;" data-plugin="' . htmlspecialchars($type) . '">';
+                        echo '<label class="btn btn-default btn-xs exposedPluginBtn" style="margin:2px;" data-plugin="' . htmlspecialchars($type) . '" title="' . $nb . ' {{équipement(s)}}">';
                         echo '<input type="checkbox" class="eqLogicAttr cb_exposedPlugin" style="display:none;" data-l1key="configuration" data-l2key="exposed_view_plugins" data-l3key="' . htmlspecialchars($type) . '" data-plugin="' . htmlspecialchars($type) . '" /> ';
                         echo htmlspecialchars($label) . ' <span class="badge exposedPluginBadge" data-plugin="' . htmlspecialchars($type) . '"></span>';
                         echo '</label>';
@@ -511,7 +511,7 @@ $eqLogics = eqLogic::byType($plugin->getId());
                         <span class="label label-info" id="span_exposedCount" style="margin-left:8px;"></span>
                     </div>
                 </div>
-                <div class="alert alert-info" id="div_exposedHint" style="margin-top:10px;">{{Les commandes cochées sont envoyées à chaque demande (l'agent les voit sans appeler d'outil) et il peut lire leur historique. Coche seulement l'utile : moins il y en a, plus il répond vite. Le « Commentaire » de l'équipement est envoyé avec.}}</div>
+                <div class="alert alert-info" id="div_exposedHint" style="margin-top:10px;"></div>
 
                 <legend><i class="fas fa-eye"></i> {{Commandes Infos exposées (lecture contexte)}}</legend>
                 <div style="max-height: 450px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin-bottom: 15px;">
@@ -525,22 +525,7 @@ $eqLogics = eqLogic::byType($plugin->getId());
                                 <th>{{Valeur actuelle}}</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            <?php
-                            foreach ($exposedRows['info'] as $r) {
-                                list($type, $objName, $eq, $cmd) = $r;
-                                $cmdId = $cmd->getId();
-                                $val = $cmd->execCmd();
-                                echo '<tr class="exposedCmdRow" data-plugin="' . htmlspecialchars($type) . '" style="display:none;">';
-                                echo '<td><input type="checkbox" class="eqLogicAttr cb_exposedCmd" data-l1key="configuration" data-l2key="exposed_cmds" data-l3key="' . $cmdId . '" /></td>';
-                                echo '<td>' . htmlspecialchars($objName) . '</td>';
-                                echo '<td>' . htmlspecialchars($eq->getName()) . '</td>';
-                                echo '<td>' . htmlspecialchars($cmd->getName()) . ' <small class="text-muted">(#' . $cmdId . '#)</small></td>';
-                                echo '<td>' . htmlspecialchars(mb_substr((string)(is_array($val) ? json_encode($val) : $val), 0, 80) . ' ' . (string)$cmd->getUnite()) . '</td>';
-                                echo '</tr>';
-                            }
-                            ?>
-                        </tbody>
+                        <tbody></tbody>
                     </table>
                 </div>
 
@@ -556,21 +541,7 @@ $eqLogics = eqLogic::byType($plugin->getId());
                                 <th>{{Sous-type}}</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            <?php
-                            foreach ($exposedRows['action'] as $r) {
-                                list($type, $objName, $eq, $cmd) = $r;
-                                $cmdId = $cmd->getId();
-                                echo '<tr class="exposedCmdRow" data-plugin="' . htmlspecialchars($type) . '" style="display:none;">';
-                                echo '<td><input type="checkbox" class="eqLogicAttr cb_exposedCmd" data-l1key="configuration" data-l2key="exposed_action_cmds" data-l3key="' . $cmdId . '" /></td>';
-                                echo '<td>' . htmlspecialchars($objName) . '</td>';
-                                echo '<td>' . htmlspecialchars($eq->getName()) . '</td>';
-                                echo '<td>' . htmlspecialchars($cmd->getName()) . ' <small class="text-muted">(#' . $cmdId . '#)</small></td>';
-                                echo '<td>' . htmlspecialchars((string)$cmd->getSubType()) . '</td>';
-                                echo '</tr>';
-                            }
-                            ?>
-                        </tbody>
+                        <tbody></tbody>
                     </table>
                 </div>
             </div>
