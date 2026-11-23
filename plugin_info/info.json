@@ -1,0 +1,12 @@
+{
+    "id": "ollamaAgent",
+    "name": "Agent Ollama",
+    "description": "Agent IA local Ollama pour Jeedom : questions par commandes, lecture des plugins (repas, énergie…), ajout dans l'agenda par message, surveillance de Jeedom (Zigbee, Z-Wave, IP, serveurs, démons, piles), pilotage des commandes cochées.",
+    "licence": "AGPL",
+    "author": "Perso",
+    "require": "4.3.0",
+    "version": "2.3.1",
+    "category": "communication",
+    "hasDependency": false,
+    "hasOwnDeamon": false
+}
