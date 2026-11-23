@@ -5,7 +5,7 @@
     "licence": "AGPL",
     "author": "Perso",
     "require": "4.3.0",
-    "version": "2.3.3",
+    "version": "2.3.4",
     "category": "communication",
     "hasDependency": false,
     "hasOwnDeamon": false

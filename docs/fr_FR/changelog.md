@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.4 (2026-11-23)
+- Réponse d'Ollama reçue au fil de l'eau : le délai (timeout) ne coupe plus que si Ollama ne produit plus rien pendant ce temps ; une réponse longue mais qui avance n'est plus perdue (plafond : 4 × le délai).
+- `lire_plugin` compact : commandes visibles et non vides, groupées par équipement, 60 commandes / 6 000 caractères au plus, et paramètre `filtre` (ex. batterie) pour ne lire que l'utile. Évite de déborder le contexte du modèle (cause des 300 s sans réponse).
+- Log : temps de réponse, taille du contexte en tokens, et avertissement si le contexte dépasse num_ctx.
+- WhatsApp : en cas d'erreur, message lisible (« Désolé, je n'ai pas pu répondre… ») au lieu de l'erreur technique.
+
 ## 2.3.3 (2026-11-23)
 - Ping plus patient : un essai rapide, puis pour ceux qui n'ont pas répondu, 3 essais avec 3 s de délai (réglables). Test de port : 2 essais, 5 s de délai (réglable).
 - Un équipement IP ou un serveur n'est déclaré hors ligne qu'après 2 contrôles ratés de suite (réglable) ; avant, il apparaît « en vérification » dans le bilan.

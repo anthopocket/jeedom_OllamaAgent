@@ -120,17 +120,42 @@ class ollamaAgent extends eqLogic {
      * Envoi d'une requête /api/chat à Ollama.
      * Retourne ['ok' => bool, 'data' => array|null, 'error' => string, 'http' => int, 'raw' => string]
      */
+    /**
+     * Envoi d'une requête /api/chat à Ollama, réponse reçue au fil de l'eau (stream).
+     * $timeout = temps maximal SANS RIEN recevoir (lecture du contexte, puis entre deux morceaux) :
+     * un modèle lent mais qui avance n'est plus coupé. Plafond total : 4 × $timeout.
+     * Retourne ['ok' => bool, 'data' => array|null, 'error' => string, 'http' => int, 'raw' => string]
+     */
     public static function chatOllama($payload, $timeout = 300, $interruptible = false) {
         $ollamaUrl = rtrim(config::byKey('ollama_url', 'ollamaAgent', 'http://127.0.0.1:11434'), '/');
         $endpoint = $ollamaUrl . '/api/chat';
-        log::add('ollamaAgent', 'debug', '[chatOllama] POST ' . $endpoint . ' modèle=' . ($payload['model'] ?? '?') . ' outils=' . (isset($payload['tools']) ? count($payload['tools']) : 0) . ' timeout=' . $timeout . 's');
+        $payload['stream'] = true;
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        log::add('ollamaAgent', 'debug', '[chatOllama] POST ' . $endpoint . ' modèle=' . ($payload['model'] ?? '?') . ' outils=' . (isset($payload['tools']) ? count($payload['tools']) : 0) . ' taille=' . round(strlen($body) / 1024, 1) . ' Ko timeout=' . $timeout . 's');
 
+        $t0 = microtime(true);
+        $state = ['buf' => '', 'raw' => '', 'content' => '', 'thinking' => '', 'tool_calls' => [], 'done' => false, 'final' => [], 'error' => '', 'first' => 0.0, 'role' => 'assistant'];
         $ch = curl_init($endpoint);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
-        curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        curl_setopt($ch, CURLOPT_TIMEOUT, max(60, $timeout * 4));
+        curl_setopt($ch, CURLOPT_LOW_SPEED_LIMIT, 1);
+        curl_setopt($ch, CURLOPT_LOW_SPEED_TIME, max(10, $timeout));
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $chunk) use (&$state, $t0) {
+            if ($state['first'] == 0.0) {
+                $state['first'] = microtime(true) - $t0;
+            }
+            if (strlen($state['raw']) < 4000) {
+                $state['raw'] .= substr($chunk, 0, 4000 - strlen($state['raw']));
+            }
+            $state['buf'] .= $chunk;
+            while (($pos = strpos($state['buf'], "\n")) !== false) {
+                self::streamLine(substr($state['buf'], 0, $pos), $state);
+                $state['buf'] = substr($state['buf'], $pos + 1);
+            }
+            return strlen($chunk);
+        });
         if ($interruptible) {
             // un agent prioritaire (vision) démarre : on coupe la connexion, Ollama arrête alors la génération
             $lastCheck = 0.0;
@@ -144,13 +169,16 @@ class ollamaAgent extends eqLogic {
                 return self::priorityActive() ? 1 : 0;
             });
         }
-        $response = curl_exec($ch);
+        curl_exec($ch);
         $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlErrno = curl_errno($ch);
         $curlError = curl_error($ch);
         curl_close($ch);
+        if (trim($state['buf']) !== '') {
+            self::streamLine($state['buf'], $state);
+        }
 
-        $res = ['ok' => false, 'data' => null, 'error' => '', 'http' => $httpCode, 'raw' => (string)$response, 'interrupted' => false];
+        $res = ['ok' => false, 'data' => null, 'error' => '', 'http' => $httpCode, 'raw' => $state['raw'], 'interrupted' => false, 'timeout' => false];
         if ($interruptible && $curlErrno == 42) {
             log::add('ollamaAgent', 'info', '[chatOllama] Demande interrompue : un agent prioritaire passe devant.');
             $res['interrupted'] = true;
@@ -158,23 +186,70 @@ class ollamaAgent extends eqLogic {
             return $res;
         }
         if ($curlError) {
-            log::add('ollamaAgent', 'error', '[chatOllama] Erreur cURL : ' . $curlError);
-            $res['error'] = 'Erreur Ollama (cURL) : ' . $curlError;
+            $res['timeout'] = in_array($curlErrno, [28], true);
+            $what = $state['first'] == 0.0 ? 'aucune réponse d\'Ollama en ' . round(microtime(true) - $t0) . ' s (lecture du contexte trop longue ?)' : 'Ollama s\'est arrêté de répondre';
+            log::add('ollamaAgent', 'error', '[chatOllama] ' . $what . ' — cURL : ' . $curlError);
+            $res['error'] = 'Erreur Ollama : ' . $what;
             return $res;
         }
         if ($httpCode < 200 || $httpCode >= 300) {
-            log::add('ollamaAgent', 'error', '[chatOllama] HTTP ' . $httpCode . ' : ' . mb_substr((string)$response, 0, 500));
-            $res['error'] = 'Erreur Ollama (HTTP ' . $httpCode . ') : ' . mb_substr((string)$response, 0, 300);
+            log::add('ollamaAgent', 'error', '[chatOllama] HTTP ' . $httpCode . ' : ' . mb_substr($state['raw'], 0, 500));
+            $res['error'] = 'Erreur Ollama (HTTP ' . $httpCode . ') : ' . mb_substr($state['error'] !== '' ? $state['error'] : $state['raw'], 0, 300);
             return $res;
         }
-        $data = json_decode($response, true);
-        if (!is_array($data)) {
-            $res['error'] = 'Erreur décodage réponse Ollama : ' . json_last_error_msg();
+        if ($state['error'] !== '') {
+            $res['error'] = 'Erreur Ollama : ' . $state['error'];
+            log::add('ollamaAgent', 'error', '[chatOllama] ' . $state['error']);
             return $res;
         }
+        $message = ['role' => $state['role'], 'content' => $state['content']];
+        if ($state['thinking'] !== '') {
+            $message['thinking'] = $state['thinking'];
+        }
+        if (!empty($state['tool_calls'])) {
+            $message['tool_calls'] = $state['tool_calls'];
+        }
+        $data = $state['final'];
+        $data['message'] = $message;
         $res['ok'] = true;
         $res['data'] = $data;
+        $evalN = (int)($state['final']['prompt_eval_count'] ?? 0);
+        $genN = (int)($state['final']['eval_count'] ?? 0);
+        log::add('ollamaAgent', 'debug', '[chatOllama] Réponse en ' . round(microtime(true) - $t0, 1) . ' s (' . ($state['first'] > 0 ? '1er octet ' . round($state['first'], 1) . ' s' : 'rien reçu') . ($evalN ? ', contexte ' . $evalN . ' tokens' : '') . ($genN ? ', ' . $genN . ' tokens générés' : '') . ')');
         return $res;
+    }
+
+    /** Une ligne du flux Ollama (NDJSON) : on assemble contenu, réflexion et appels d'outils */
+    private static function streamLine($line, &$state) {
+        $line = trim($line);
+        if ($line === '') {
+            return;
+        }
+        $j = json_decode($line, true);
+        if (!is_array($j)) {
+            return;
+        }
+        if (isset($j['error'])) {
+            $state['error'] = is_string($j['error']) ? $j['error'] : json_encode($j['error']);
+            return;
+        }
+        $m = $j['message'] ?? [];
+        if (isset($m['role'])) {
+            $state['role'] = $m['role'];
+        }
+        $state['content'] .= (string)($m['content'] ?? '');
+        $state['thinking'] .= (string)($m['thinking'] ?? '');
+        if (!empty($m['tool_calls']) && is_array($m['tool_calls'])) {
+            foreach ($m['tool_calls'] as $tc) {
+                $state['tool_calls'][] = $tc;
+            }
+        }
+        if (!empty($j['done']) || !isset($j['done'])) {
+            $final = $j;
+            unset($final['message']);
+            $state['final'] = $final;
+            $state['done'] = true;
+        }
     }
 
     /* ============================================================
@@ -280,21 +355,58 @@ class ollamaAgent extends eqLogic {
     }
 
     /** Toutes les commandes info des équipements actifs d'un plugin */
-    public static function dumpPlugin($pluginId, $maxCmds = 150) {
+    /**
+     * Commandes info d'un plugin, groupées par équipement et compactes (taille limitée pour
+     * ne pas déborder le contexte du modèle). $filtre = mots à chercher (équipement ou commande).
+     */
+    public static function dumpPlugin($pluginId, $maxCmds = 60, $filtre = '', $maxChars = 6000) {
         $eqs = eqLogic::byType($pluginId, true);
         if (!is_array($eqs) || count($eqs) == 0) {
             return "Plugin {$pluginId} : aucun équipement actif.";
         }
-        $lines = ["Plugin {$pluginId} :"];
+        $words = array_filter(preg_split('/\s+/', mb_strtolower(trim((string)$filtre))));
+        $lines = ["Plugin {$pluginId}" . (!empty($words) ? ' (filtre : ' . implode(' ', $words) . ')' : '') . ' — #id = numéro de commande pour lire_commande / lire_historique :'];
         $n = 0;
+        $skipped = 0;
+        $chars = 0;
         foreach ($eqs as $eq) {
+            $eqLines = [];
+            $eqName = mb_strtolower($eq->getName());
             foreach ($eq->getCmd('info') as $cmd) {
-                if ($n++ >= $maxCmds) {
-                    $lines[] = '… (liste tronquée à ' . $maxCmds . ' commandes)';
-                    break 2;
+                if (!empty($words)) {
+                    $hay = $eqName . ' ' . mb_strtolower($cmd->getName() . ' ' . $cmd->getLogicalId());
+                    foreach ($words as $w) {
+                        if (mb_strpos($hay, $w) === false) {
+                            continue 2;
+                        }
+                    }
+                } elseif ($cmd->getIsVisible() != 1) {
+                    continue; // sans filtre : seulement les commandes visibles
                 }
-                $lines[] = self::cmdLine($cmd);
+                $val = $cmd->execCmd();
+                if ($val === '' || $val === null) {
+                    continue;
+                }
+                if ($n >= $maxCmds || $chars > $maxChars) {
+                    $skipped++;
+                    continue;
+                }
+                $unit = $cmd->getUnite();
+                $l = '  #' . $cmd->getId() . ' ' . $cmd->getName() . ' = ' . self::shortValue($val, 120) . ($unit !== '' ? ' ' . $unit : '');
+                $eqLines[] = $l;
+                $chars += strlen($l);
+                $n++;
             }
+            if (!empty($eqLines)) {
+                $lines[] = '- ' . $eq->getHumanName() . ' :';
+                $lines = array_merge($lines, $eqLines);
+            }
+        }
+        if ($n == 0) {
+            return "Plugin {$pluginId} : aucune commande" . (!empty($words) ? ' ne correspond au filtre.' : ' visible avec une valeur.');
+        }
+        if ($skipped > 0) {
+            $lines[] = "… {$skipped} autre(s) commande(s) non affichée(s) : relance lire_plugin avec un filtre (ex. batterie, production, consommation).";
         }
         return implode("\n", $lines);
     }
@@ -303,7 +415,7 @@ class ollamaAgent extends eqLogic {
     private function injectedContext() {
         $parts = [];
         foreach ($this->allowedPlugins() as $pluginId) {
-            $parts[] = self::dumpPlugin($pluginId, 80);
+            $parts[] = self::dumpPlugin($pluginId, 40, '', 3000);
         }
         if ($this->repasEnabled()) {
             try {
@@ -1216,7 +1328,10 @@ class ollamaAgent extends eqLogic {
             if (!$full) {
                 $prop['enum'] = $plugins;
             }
-            $tools[] = self::tool('lire_plugin', "Lit l'état actuel (commandes info et valeurs) de tous les équipements d'un plugin Jeedom : repas, énergie, agenda, etc.", ['plugin' => $prop], ['plugin']);
+            $tools[] = self::tool('lire_plugin', "Lit l'état actuel (commandes info et valeurs) des équipements d'un plugin Jeedom : repas, énergie, agenda, etc. Utilise filtre pour ne lire que ce qui t'intéresse.", [
+                'plugin' => $prop,
+                'filtre' => ['type' => 'string', 'description' => 'Mots à chercher dans le nom de l\'équipement ou de la commande (ex. batterie, soc, production, puissance). Conseillé.'],
+            ], ['plugin']);
         }
         if ($full) {
             $tools[] = self::tool('chercher_commandes', 'Cherche dans tout Jeedom les commandes info dont l\'objet, l\'équipement ou le nom contient le texte, et donne leur valeur.', [
@@ -1398,7 +1513,7 @@ class ollamaAgent extends eqLogic {
                     if (!$this->isFullRead() && !in_array($p, $this->allowedPlugins(), true)) {
                         return "Plugin « {$p} » non autorisé pour cet agent.";
                     }
-                    return self::dumpPlugin($p);
+                    return self::dumpPlugin($p, 60, (string)($args['filtre'] ?? ''));
                 case 'chercher_commandes':
                     return $this->isFullRead() ? self::searchCmds($args['texte'] ?? '') : 'Recherche non autorisée.';
                 case 'lire_commande':
@@ -2078,7 +2193,8 @@ class ollamaAgent extends eqLogic {
         log::add('ollamaAgent', 'info', '[Agent ' . $this->getName() . '] Réponse en ' . $duree . ' s (statut=' . ($isError ? 'Erreur' : 'Prêt') . ')');
         $viaMessaging = isset($context['reply_to']);
         if ($viaMessaging) {
-            ollamaAgentMessaging::sendReply($reply, (string)$context['reply_to'], $this->getName());
+            $msgText = $isError ? 'Désolé, je n\'ai pas pu répondre. ' . preg_replace('/^Erreur Ollama\s*:\s*/u', '', $reply) : $reply;
+            ollamaAgentMessaging::sendReply($msgText, (string)$context['reply_to'], $this->getName());
         }
         // pas de double envoi si la commande d'envoi de l'agent est celle de la messagerie
         $notifyCmd = self::cmdFromConfig($this->getConfiguration('notify_cmd', ''));
@@ -2340,6 +2456,13 @@ class ollamaAgent extends eqLogic {
             $keepAlive = $this->keepAliveDuring();
             if ($keepAlive !== null) {
                 $payload['keep_alive'] = $keepAlive;
+            }
+
+            $ctxChars = strlen(json_encode($payload['messages'], JSON_UNESCAPED_UNICODE)) + (isset($payload['tools']) ? strlen(json_encode($payload['tools'], JSON_UNESCAPED_UNICODE)) : 0);
+            $ctxTokens = (int)round($ctxChars / 3.2);
+            $ctxMax = $numCtx > 0 ? $numCtx : 4096;
+            if ($ctxTokens > $ctxMax * 0.85) {
+                log::add('ollamaAgent', 'warning', '[Agent ' . $this->getName() . '] Contexte d\'environ ' . $ctxTokens . ' tokens pour num_ctx=' . ($numCtx > 0 ? $numCtx : 'défaut Ollama (4096)') . ' : le début risque d\'être coupé. Augmente num_ctx ou réduis les plugins/infos exposés.');
             }
 
             $res = self::chatOllama($payload, $timeout, $interruptible);
